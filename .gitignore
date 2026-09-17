@@ -53,3 +53,8 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# C64 build outputs (cl65/c1541)
+build/
+*.prg
+*.d64
