@@ -94,6 +94,27 @@ static void clamp_speed(int *v)
     if (*v < -MAX_SPEED) *v = -MAX_SPEED;
 }
 
+/* v -= v>>FRICTION_SHIFT, done symmetrically. Plain `v -= v>>7` looked
+   like friction but wasn't: `>>` on a signed int is an ARITHMETIC
+   shift, which is not symmetric around zero. For 0<=v<128, v>>7 floors
+   to exactly 0, so positive velocity never decayed at all. For
+   -128<v<0, arithmetic shift rounds toward negative infinity, giving
+   -1, so negative velocity DID decay, by 1/frame. That's exactly the
+   reported bug: left/up (negative) slowed to a stop, right/down
+   (positive) never did. Shifting the magnitude instead of the signed
+   value, and clamping so the decay can't overshoot past zero and
+   oscillate, fixes both directions the same way. */
+static void apply_friction(int *v)
+{
+    if (*v > 0) {
+        *v -= (*v >> FRICTION_SHIFT) + 1;
+        if (*v < 0) *v = 0;
+    } else if (*v < 0) {
+        *v += ((-*v) >> FRICTION_SHIFT) + 1;
+        if (*v > 0) *v = 0;
+    }
+}
+
 static void update_ship(void)
 {
     if (keyA) {
@@ -108,8 +129,8 @@ static void update_ship(void)
         shipVY += THRUST_DY[shipAngle];
     }
 
-    shipVX -= shipVX >> FRICTION_SHIFT;
-    shipVY -= shipVY >> FRICTION_SHIFT;
+    apply_friction(&shipVX);
+    apply_friction(&shipVY);
     clamp_speed(&shipVX);
     clamp_speed(&shipVY);
 
@@ -153,39 +174,86 @@ static void update_bullets(void)
     }
 }
 
-/* Screen-space clamp before every draw_line_asm() call --
+/* Screen-space clipping before every draw_line_asm() call --
    draw_line_asm() does raw pointer arithmetic into the bitmap with no
    bounds checking of its own, so a segment endpoint that ends up
    negative or past 319/199 isn't a cosmetic glitch, it's a write to
    whatever memory that arithmetic happens to land on.
 
-   First a trivial-reject test: if both endpoints are outside the
-   screen on the *same* side (both left of 0, both right of 319, etc),
-   none of the segment is visible -- skip it outright, rather than
-   clamping it, or it would get snapped onto the boundary and draw a
-   spurious line that doesn't belong there. Otherwise, at least part
-   of the segment is genuinely on-screen: clamp each coordinate to the
-   valid range and draw that. This isn't exact geometric line
-   clipping (the clamped line's slope near the boundary isn't quite
-   the true intersection), but for the short segments this project
-   draws it draws right up to the edge instead of either vanishing or
-   corrupting memory, which is what actually matters here. */
-static int clampi(int v, int lo, int hi)
+   A first version just clamped each coordinate independently to the
+   valid range instead of computing the real line/boundary
+   intersection -- cheaper, but wrong: clamping distorts the segment's
+   slope near the edge, which is what "the shape deforms, it tries to
+   maintain a full triangle and is crushed" was. This is the real
+   fix: proper Liang-Barsky line clipping (standard, textbook
+   computational geometry) against the [0,SCREEN_W-1]x[0,SCREEN_H-1]
+   box, computed with a fixed-point parameter (T_SCALE) instead of
+   floats, since the 6502 has no hardware float. Segments fully inside
+   already (the common case, whenever the ship isn't near an edge)
+   skip the clipping math entirely. */
+#define T_SCALE 256L
+
+static unsigned char clip_segment(int x0, int y0, int x1, int y1,
+                                   int *rx0, int *ry0, int *rx1, int *ry1)
 {
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
+    long dx, dy, t0, t1, p, q, r;
+
+    if (x0 >= 0 && x0 < SCREEN_W && x1 >= 0 && x1 < SCREEN_W &&
+        y0 >= 0 && y0 < SCREEN_H && y1 >= 0 && y1 < SCREEN_H) {
+        *rx0 = x0; *ry0 = y0; *rx1 = x1; *ry1 = y1;
+        return 1;
+    }
+
+    dx = x1 - x0;
+    dy = y1 - y0;
+    t0 = 0;
+    t1 = T_SCALE;
+
+    /* left: x >= 0 */
+    p = -dx; q = x0;
+    if (p == 0) { if (q < 0) return 0; }
+    else {
+        r = (q * T_SCALE) / p;
+        if (p < 0) { if (r > t1) return 0; if (r > t0) t0 = r; }
+        else       { if (r < t0) return 0; if (r < t1) t1 = r; }
+    }
+    /* right: x <= SCREEN_W-1 */
+    p = dx; q = (SCREEN_W - 1) - x0;
+    if (p == 0) { if (q < 0) return 0; }
+    else {
+        r = (q * T_SCALE) / p;
+        if (p < 0) { if (r > t1) return 0; if (r > t0) t0 = r; }
+        else       { if (r < t0) return 0; if (r < t1) t1 = r; }
+    }
+    /* top: y >= 0 */
+    p = -dy; q = y0;
+    if (p == 0) { if (q < 0) return 0; }
+    else {
+        r = (q * T_SCALE) / p;
+        if (p < 0) { if (r > t1) return 0; if (r > t0) t0 = r; }
+        else       { if (r < t0) return 0; if (r < t1) t1 = r; }
+    }
+    /* bottom: y <= SCREEN_H-1 */
+    p = dy; q = (SCREEN_H - 1) - y0;
+    if (p == 0) { if (q < 0) return 0; }
+    else {
+        r = (q * T_SCALE) / p;
+        if (p < 0) { if (r > t1) return 0; if (r > t0) t0 = r; }
+        else       { if (r < t0) return 0; if (r < t1) t1 = r; }
+    }
+
+    if (t0 > t1) return 0;
+
+    *rx0 = x0 + (int)((dx * t0) / T_SCALE);
+    *ry0 = y0 + (int)((dy * t0) / T_SCALE);
+    *rx1 = x0 + (int)((dx * t1) / T_SCALE);
+    *ry1 = y0 + (int)((dy * t1) / T_SCALE);
+    return 1;
 }
 
 static void draw_segment_clamped(int xa, int ya, int xb, int yb)
 {
-    if ((xa < 0 && xb < 0) || (xa >= SCREEN_W && xb >= SCREEN_W)) return;
-    if ((ya < 0 && yb < 0) || (ya >= SCREEN_H && yb >= SCREEN_H)) return;
-
-    xa = clampi(xa, 0, SCREEN_W - 1);
-    xb = clampi(xb, 0, SCREEN_W - 1);
-    ya = clampi(ya, 0, SCREEN_H - 1);
-    yb = clampi(yb, 0, SCREEN_H - 1);
+    if (!clip_segment(xa, ya, xb, yb, &xa, &ya, &xb, &yb)) return;
 
     if (xa <= xb) {
         dla_x0 = xa; dla_y0 = ya; dla_x1 = xb; dla_y1 = yb;
