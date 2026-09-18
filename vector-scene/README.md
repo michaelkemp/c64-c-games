@@ -406,21 +406,42 @@ Roughly in order of expected value:
    own -- worth remeasuring if pursued, but expectations should be
    modest. Trick #2 (indirect-Y) is the more broadly reliable default
    until/unless that changes.
-2. **Find the erase-vs-clear crossover object count.** Trick #4 won
-   for one small object per buffer (~25% faster than erasing); the
-   README section above already predicts erasing wins again once
-   enough objects/pixels are on screen that "sum of N objects' erase
-   cost" exceeds "one fixed-cost full clear" (~40,000-ish cycles).
-   Worth measuring directly with 2, 4, 8... objects rather than
-   guessing where that line is.
-3. Re-run `hires-bounce/tests/bench_scene.c`'s ship+3-asteroids scene
-   with all of the above (trick #2 for drawing, whichever of trick
-   #3's erase or trick #4's clear wins at that object count from (2)),
-   to get a real, un-silently-wrong answer to the question that paused
+2. **The real crossover variable is static content, not object count.**
+   (Refined after a conversation about this exact section: the
+   original framing above -- "erasing wins past some object count" --
+   isn't quite right.) Trick #3's per-object erase costs nothing for
+   an object that *didn't move* this frame; trick #4's full clear
+   forces a redraw of *everything*, moving or not, since it can't tell
+   the difference. A scene that's mostly static background with one
+   moving object favors trick #3 heavily (the static content costs
+   zero, forever); a scene where everything moves every frame (like
+   this folder's rotating square) favors trick #4. Worth measuring
+   directly with a mix of static and moving objects rather than
+   guessing where the line is.
+3. **A third option that could beat both for a mixed scene: a
+   pre-rendered template buffer.** Draw static content into a template
+   bitmap once, at setup; each frame, *copy* the template into the
+   back buffer (roughly 2x a plain clear's cost per byte -- it has to
+   read the template as well as write it -- but still a fixed cost
+   independent of scene complexity) instead of clearing it, then draw
+   only the objects that moved. Since the freshly-copied buffer never
+   had the moving objects in it, they need no erase either, only a
+   draw at their new position. Static content ends up costing nothing
+   per frame (paid for once, at setup) and moving content only ever
+   pays draw cost, never erase cost -- the union of trick #3's "static
+   is free" and trick #4's "fixed, content-independent cost," without
+   either one's downside. Not built or measured yet; a natural
+   candidate for whichever project ends up with a mostly-static scene
+   and a few moving objects (a starfield background, a HUD, etc.).
+4. Re-run `hires-bounce/tests/bench_scene.c`'s ship+3-asteroids scene
+   with all of the above (trick #2 for drawing, and whichever of trick
+   #3's per-object erase, trick #4's full clear, or item (3)'s template
+   buffer fits that scene's static/moving mix best), to get a real,
+   un-silently-wrong answer to the question that paused
    `hires-bounce/`: does this close enough of the 65-75x-over-budget
    gap to make a CPU-drawn vector scene viable, or does it still point
    to hardware sprites?
-4. Push the rotating-square demo's per-step budget down further (6.85
+5. Push the rotating-square demo's per-step budget down further (6.85
    PAL frame budgets with trick #4, down from 9.2 with trick #2/#3):
    shorter edges (smaller radius) and/or advancing more than 1 degree
    per redraw (fewer, bigger angular steps -- cheaper per second of
