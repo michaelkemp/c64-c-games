@@ -35,27 +35,38 @@
 #define CIA1_PRA (*(volatile unsigned char *)0xDC00)
 #define CIA1_PRB (*(volatile unsigned char *)0xDC01)
 
-static unsigned char key_down(unsigned char col, unsigned char row)
+/* C64 keyboard matrix (column, row) -- see main.c's git history /
+   README for the derivation if these ever need rechecking:
+   W=(1,1) A=(2,1) D=(2,2) SPACE=(4,7). */
+
+static unsigned char keyW, keyA, keyD, keySpace;
+
+/* Scans all four keys in ONE SEI/CLI block, not four separate ones.
+   Found by testing: with A and D each wired to their own separate
+   key_down() call (each with its own SEI/select/read/restore/CLI),
+   the ship's heading drifted on its own with nobody touching the
+   keyboard -- but only when A's *and* D's checks were both active;
+   either alone was rock solid. The KERNAL's own IRQ handler scans the
+   keyboard too, and it was landing in the brief CLI-to-next-SEI gap
+   between the two separate calls, disturbing CIA1_PRA/PRB just
+   before the second call's own select+read. Scanning everything in
+   one uninterruptible block removes that gap entirely. A and D also
+   share column 2, so that column only needs to be selected once. */
+static void scan_keys(void)
 {
     unsigned char saved = CIA1_PRA;
-    unsigned char pressed;
 
-    SEI(); /* the KERNAL's own IRQ handler scans the keyboard too --
-              stop it from changing CIA1_PRA out from under us mid-scan */
-    CIA1_PRA = ~(1 << col);
-    pressed = !(CIA1_PRB & (1 << row));
+    SEI();
+    CIA1_PRA = ~(1 << 1);
+    keyW = !(CIA1_PRB & (1 << 1));
+    CIA1_PRA = ~(1 << 2);
+    keyA = !(CIA1_PRB & (1 << 1));
+    keyD = !(CIA1_PRB & (1 << 2));
+    CIA1_PRA = ~(1 << 4);
+    keySpace = !(CIA1_PRB & (1 << 7));
     CIA1_PRA = saved;
     CLI();
-
-    return pressed;
 }
-
-/* C64 keyboard matrix (column, row) -- see main.c's git history /
-   README for the derivation if these ever need rechecking. */
-#define KEY_W()     key_down(1, 1)
-#define KEY_A()     key_down(2, 1)
-#define KEY_D()     key_down(2, 2)
-#define KEY_SPACE() key_down(4, 7)
 
 static unsigned int shipAngle = 0;
 static int shipX = 160 << POS_SHIFT;
@@ -85,14 +96,14 @@ static void clamp_speed(int *v)
 
 static void update_ship(void)
 {
-    if (KEY_A()) {
+    if (keyA) {
         shipAngle = (shipAngle < 3) ? shipAngle + 357 : shipAngle - 3;
     }
-    if (KEY_D()) {
+    if (keyD) {
         shipAngle += 3;
         if (shipAngle >= 360) shipAngle -= 360;
     }
-    if (KEY_W()) {
+    if (keyW) {
         shipVX += THRUST_DX[shipAngle];
         shipVY += THRUST_DY[shipAngle];
     }
@@ -110,7 +121,7 @@ static void try_fire(void)
 {
     unsigned char i;
 
-    if (!KEY_SPACE()) return;
+    if (!keySpace) return;
 
     for (i = 0; i < MAX_BULLETS; i++) {
         if (!bulletActive[i]) {
@@ -142,26 +153,102 @@ static void update_bullets(void)
     }
 }
 
-static void draw_ship(unsigned char *bitmap_base)
+/* Screen-space clamp before every draw_line_asm() call --
+   draw_line_asm() does raw pointer arithmetic into the bitmap with no
+   bounds checking of its own, so a segment endpoint that ends up
+   negative or past 319/199 isn't a cosmetic glitch, it's a write to
+   whatever memory that arithmetic happens to land on.
+
+   First a trivial-reject test: if both endpoints are outside the
+   screen on the *same* side (both left of 0, both right of 319, etc),
+   none of the segment is visible -- skip it outright, rather than
+   clamping it, or it would get snapped onto the boundary and draw a
+   spurious line that doesn't belong there. Otherwise, at least part
+   of the segment is genuinely on-screen: clamp each coordinate to the
+   valid range and draw that. This isn't exact geometric line
+   clipping (the clamped line's slope near the boundary isn't quite
+   the true intersection), but for the short segments this project
+   draws it draws right up to the edge instead of either vanishing or
+   corrupting memory, which is what actually matters here. */
+static int clampi(int v, int lo, int hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+static void draw_segment_clamped(int xa, int ya, int xb, int yb)
+{
+    if ((xa < 0 && xb < 0) || (xa >= SCREEN_W && xb >= SCREEN_W)) return;
+    if ((ya < 0 && yb < 0) || (ya >= SCREEN_H && yb >= SCREEN_H)) return;
+
+    xa = clampi(xa, 0, SCREEN_W - 1);
+    xb = clampi(xb, 0, SCREEN_W - 1);
+    ya = clampi(ya, 0, SCREEN_H - 1);
+    yb = clampi(yb, 0, SCREEN_H - 1);
+
+    if (xa <= xb) {
+        dla_x0 = xa; dla_y0 = ya; dla_x1 = xb; dla_y1 = yb;
+    } else {
+        dla_x0 = xb; dla_y0 = yb; dla_x1 = xa; dla_y1 = ya;
+    }
+    draw_line_asm();
+}
+
+static void draw_ship_at(int cx, int cy)
 {
     unsigned char i;
+
+    for (i = 0; i < SHIP_POINTS - 1; i++) {
+        draw_segment_clamped(cx + SHIP_DX[shipAngle][i], cy + SHIP_DY[shipAngle][i],
+                              cx + SHIP_DX[shipAngle][i + 1], cy + SHIP_DY[shipAngle][i + 1]);
+    }
+}
+
+#define SHIP_MARGIN 16 /* >= the ship's own max vertex radius (~11px), plus slack */
+
+static void draw_ship(unsigned char *bitmap_base)
+{
     int cx = shipX >> POS_SHIFT;
     int cy = shipY >> POS_SHIFT;
+    int xs[2], ys[2];
+    unsigned char nx = 1, ny = 1, i, j;
 
     dla_bitmap_base = bitmap_base;
 
-    for (i = 0; i < SHIP_POINTS - 1; i++) {
-        int xa = cx + SHIP_DX[shipAngle][i];
-        int ya = cy + SHIP_DY[shipAngle][i];
-        int xb = cx + SHIP_DX[shipAngle][i + 1];
-        int yb = cy + SHIP_DY[shipAngle][i + 1];
+    xs[0] = cx;
+    ys[0] = cy;
 
-        if (xa <= xb) {
-            dla_x0 = xa; dla_y0 = ya; dla_x1 = xb; dla_y1 = yb;
-        } else {
-            dla_x0 = xb; dla_y0 = yb; dla_x1 = xa; dla_y1 = ya;
+    /* Near a corner, both an x-shift-only and a y-shift-only copy are
+       needed, not just one combined diagonal shift: with only the
+       diagonal copy, the slice of ship near the x-edge (needing an
+       x-shift with y untouched) and the slice near the y-edge
+       (needing a y-shift with x untouched) both fell outside every
+       copy actually drawn -- confirmed by testing near (0,0), where
+       nothing appeared at all despite everything else working.
+       Drawing every combination of the applicable x and y shifts (up
+       to 2x2 = 4 copies right at a corner) covers all of them;
+       draw_segment_clamped()'s trivial-reject means each copy only
+       contributes whatever part of it is actually relevant. */
+    if (cx < SHIP_MARGIN) {
+        xs[1] = cx + SCREEN_W;
+        nx = 2;
+    } else if (cx >= SCREEN_W - SHIP_MARGIN) {
+        xs[1] = cx - SCREEN_W;
+        nx = 2;
+    }
+    if (cy < SHIP_MARGIN) {
+        ys[1] = cy + SCREEN_H;
+        ny = 2;
+    } else if (cy >= SCREEN_H - SHIP_MARGIN) {
+        ys[1] = cy - SCREEN_H;
+        ny = 2;
+    }
+
+    for (i = 0; i < nx; i++) {
+        for (j = 0; j < ny; j++) {
+            draw_ship_at(xs[i], ys[j]);
         }
-        draw_line_asm();
     }
 }
 
@@ -188,6 +275,7 @@ int main(void)
     doublebuf_init();
 
     for (;;) {
+        scan_keys();
         update_ship();
         try_fire();
         update_bullets();
