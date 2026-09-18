@@ -1,5 +1,6 @@
 #include <6502.h>
 #include <c64.h>
+#include <stdlib.h>
 
 #include "doublebuf.h"
 #include "drawline_asm.h"
@@ -37,31 +38,40 @@
 
 /* C64 keyboard matrix (column, row) -- see main.c's git history /
    README for the derivation if these ever need rechecking:
-   W=(1,1) A=(2,1) D=(2,2) SPACE=(4,7). */
+   I=(1,4) J=(2,4) K=(5,4) L=(2,5) SPACE=(4,7). Switched from WASD to
+   IJKL (I=thrust, J/L=rotate, K=hyperspace, matching the prototype's
+   up/left/right/down) because WASD is a common default binding for
+   VICE's own keyset-joystick emulation, which can intercept some of
+   those keys before they ever reach the emulated keyboard matrix at
+   all -- IJKL is far less likely to collide with that. */
 
-static unsigned char keyW, keyA, keyD, keySpace;
+static unsigned char keyI, keyJ, keyK, keyL, keySpace;
 
-/* Scans all four keys in ONE SEI/CLI block, not four separate ones.
-   Found by testing: with A and D each wired to their own separate
-   key_down() call (each with its own SEI/select/read/restore/CLI),
-   the ship's heading drifted on its own with nobody touching the
-   keyboard -- but only when A's *and* D's checks were both active;
-   either alone was rock solid. The KERNAL's own IRQ handler scans the
-   keyboard too, and it was landing in the brief CLI-to-next-SEI gap
-   between the two separate calls, disturbing CIA1_PRA/PRB just
-   before the second call's own select+read. Scanning everything in
-   one uninterruptible block removes that gap entirely. A and D also
-   share column 2, so that column only needs to be selected once. */
+/* Scans all five keys in ONE SEI/CLI block, not five separate ones.
+   Found by testing (back when this was W/A/D): with two of the keys
+   each wired to their own separate key_down() call (each with its own
+   SEI/select/read/restore/CLI), the ship's heading drifted on its own
+   with nobody touching the keyboard -- but only when both checks were
+   active; either alone was rock solid. The KERNAL's own IRQ handler
+   scans the keyboard too, and it was landing in the brief
+   CLI-to-next-SEI gap between the two separate calls, disturbing
+   CIA1_PRA/PRB just before the second call's own select+read. Scanning
+   everything in one uninterruptible block removes that gap entirely.
+   I, J and K also share row 4, so that row's column selects still
+   need doing individually, but nothing here re-selects a column that
+   was already selected moments ago the way the old W/A/D scan did. */
 static void scan_keys(void)
 {
     unsigned char saved = CIA1_PRA;
 
     SEI();
     CIA1_PRA = ~(1 << 1);
-    keyW = !(CIA1_PRB & (1 << 1));
+    keyI = !(CIA1_PRB & (1 << 4));
     CIA1_PRA = ~(1 << 2);
-    keyA = !(CIA1_PRB & (1 << 1));
-    keyD = !(CIA1_PRB & (1 << 2));
+    keyJ = !(CIA1_PRB & (1 << 4));
+    keyL = !(CIA1_PRB & (1 << 5));
+    CIA1_PRA = ~(1 << 5);
+    keyK = !(CIA1_PRB & (1 << 4));
     CIA1_PRA = ~(1 << 4);
     keySpace = !(CIA1_PRB & (1 << 7));
     CIA1_PRA = saved;
@@ -115,16 +125,18 @@ static void apply_friction(int *v)
     }
 }
 
+static unsigned char keyKPrev;
+
 static void update_ship(void)
 {
-    if (keyA) {
+    if (keyJ) {
         shipAngle = (shipAngle < 3) ? shipAngle + 357 : shipAngle - 3;
     }
-    if (keyD) {
+    if (keyL) {
         shipAngle += 3;
         if (shipAngle >= 360) shipAngle -= 360;
     }
-    if (keyW) {
+    if (keyI) {
         shipVX += THRUST_DX[shipAngle];
         shipVY += THRUST_DY[shipAngle];
     }
@@ -136,6 +148,17 @@ static void update_ship(void)
 
     shipX = wrap(shipX + shipVX, X_WRAP);
     shipY = wrap(shipY + shipVY, Y_WRAP);
+
+    /* Hyperspace (matches the prototype's down-arrow jump): triggers
+       once per press, not every frame it's held -- edge-detected
+       against last frame's state, same idea as a bullet's cooldown. */
+    if (keyK && !keyKPrev) {
+        shipX = (int)(rand() % SCREEN_W) << POS_SHIFT;
+        shipY = (int)(rand() % SCREEN_H) << POS_SHIFT;
+        shipVX = 0;
+        shipVY = 0;
+    }
+    keyKPrev = keyK;
 }
 
 static void try_fire(void)
@@ -331,8 +354,11 @@ static void draw_bullets(unsigned char *bitmap_base)
         if (!bulletActive[i]) continue;
         bx = bulletX[i] >> POS_SHIFT;
         by = bulletY[i] >> POS_SHIFT;
-        dla_x0 = bx; dla_y0 = by; dla_x1 = bx; dla_y1 = by; /* single pixel */
-        draw_line_asm();
+        /* A single pixel is real, but hard to be sure you're seeing it
+           at C64 resolution -- a tiny 3px diagonal is unmistakable, so
+           testing whether space fires at all doesn't come down to
+           squinting at the screen. */
+        draw_segment_clamped(bx - 1, by - 1, bx + 1, by + 1);
     }
 }
 
@@ -340,6 +366,7 @@ int main(void)
 {
     unsigned char back = 1; /* buffer 0 is shown first by doublebuf_init() */
 
+    srand(VIC.rasterline); /* for hyperspace's random destination */
     doublebuf_init();
 
     for (;;) {
