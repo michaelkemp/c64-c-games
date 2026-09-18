@@ -15,7 +15,7 @@ CFG      := cfg/lowmem.cfg
 CFLAGS   := -Oirs -Isrc -Itests
 
 HDRS := src/doublebuf.h src/drawline_asm.h src/clearbitmap_asm.h src/ship_table.h \
-        tests/bench_report.h tests/cia_timer.h
+        src/dir_table.h tests/bench_report.h tests/cia_timer.h
 
 .PHONY: all clean ship ship-d64 run-ship
 
@@ -24,10 +24,11 @@ all: ship-d64
 $(BUILD):
 	mkdir -p $(BUILD)
 
-# --- phase 1: rotating ship demo ---
+# --- phase 1: ship demo (WASD rotate/thrust, space to fire) ---
 
 SHIP_NAME := ship
-SHIP_SRCS := src/main.c src/doublebuf.c src/ship_table.c src/drawline_asm.s
+SHIP_SRCS := src/main.c src/doublebuf.c src/ship_table.c src/dir_table.c \
+             src/drawline_asm.s src/clearbitmap_asm.s
 SHIP_PRG  := $(BUILD)/$(SHIP_NAME).prg
 SHIP_D64  := $(BUILD)/$(SHIP_NAME).d64
 
