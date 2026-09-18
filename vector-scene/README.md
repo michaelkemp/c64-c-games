@@ -12,7 +12,8 @@ graphics, instead of stopping at "the CPU is slow, full stop":
 - A dirty-list erase instead of re-walking Bresenham to erase.
 - Double buffering across two VIC banks, and a rotating-square demo
   built on top of all of the above.
-- (Not yet built, see "What's next") a fast unrolled full-bitmap clear.
+- An unrolled full-bitmap clear, benchmarked against erasing only the
+  moved object.
 
 Every number below is machine-measured through the automated benchmark
 harness described in "Automated benchmarking", not eyeballed off the
@@ -346,6 +347,49 @@ corruption) if a program ever grows large enough to threaten it.
 `BENCH_RESULT_ADDR` and every other benchmark's raw scratch addresses
 now point into `$3F00`+ instead of the old guess.
 
+## Trick #4: unrolled full-bitmap clear (a real win, for this shape of scene)
+
+`src/clearbitmap_asm.s`: the "list of `STA` calls" idea this whole
+folder started from. `STA absolute,X` costs 5 cycles regardless of
+which page it targets, so one 256-iteration `X` loop with every page's
+`STA` unrolled inside it (32 pages per iteration, then a second short
+loop for the 64-byte remainder -- `BITMAP` is exactly 8000 bytes = 31
+full pages + 64) clears far faster than a per-byte or per-page loop.
+Two hardcoded copies, `clear_bitmap_buf0()`/`clear_bitmap_buf1()`, one
+per double-buffer target -- with only two fixed addresses that never
+change, hardcoding is simpler and cheaper than runtime-patching a
+page byte the way `dla_bitmap_base` does for the line drawer.
+`tests/correctness_check_clear.c` confirmed both clear exactly their
+8000 bytes and nothing outside that range (guard bytes before/after
+stayed untouched) before trusting any benchmark number.
+
+`src/main_clear.c` / `tests/bench_rotating_square_clear.c`: the same
+rotating-square demo/benchmark, but the back buffer is fully cleared
+before drawing the new square instead of erasing only the old one via
+a second XOR redraw (trick #2/#3's approach) -- no need to track the
+previous angle at all, a full clear removes everything unconditionally.
+
+Measured result, same 3-rotation run, same chained timer, directly
+comparable to trick #3's number:
+
+| | cycles/step | vs. erase-old-square |
+|---|---|---|
+| Erase old square (trick #2/#3) | 180,615 | 1x |
+| Full clear (trick #4) | **134,676** | **~25.4% faster** |
+
+A real win, for this specific shape of scene: one small object per
+buffer, so "clear everything" (~40,000-ish cycles, fixed regardless of
+scene content) plus "draw the 4 new lines" beats "erase the 4 old
+lines via a second Bresenham walk" plus "draw the 4 new lines," because
+erasing costs *as much as drawing did* (same algorithm, same pixel
+count) while clearing is a fixed cost independent of how many pixels
+the previous frame actually touched. The crossover this doesn't test
+yet: at higher object counts (more lines/pixels per frame, like
+`hires-bounce/tests/bench_scene.c`'s ship+3-asteroids scene), erasing
+only the touched pixels should eventually beat a fixed-cost full clear
+again, once "N objects' worth of erasing" exceeds "one clear" -- see
+"What's next."
+
 ## What's next
 
 Roughly in order of expected value:
@@ -362,26 +406,26 @@ Roughly in order of expected value:
    own -- worth remeasuring if pursued, but expectations should be
    modest. Trick #2 (indirect-Y) is the more broadly reliable default
    until/unless that changes.
-2. **The fast unrolled full-bitmap clear** (the "list of `STA` calls"
-   idea this whole folder started from): `STA $page,X` unrolled across
-   all 32 pages of the bitmap, ~5 cycles/byte, ~40,000 cycles for the
-   whole 8,000-byte bitmap. Worth benchmarking as an alternative to
-   per-object dirty-list erase for scenes with many objects, where
-   "clear everything, redraw everything" might beat "erase N objects,
-   draw N objects" past some object count.
+2. **Find the erase-vs-clear crossover object count.** Trick #4 won
+   for one small object per buffer (~25% faster than erasing); the
+   README section above already predicts erasing wins again once
+   enough objects/pixels are on screen that "sum of N objects' erase
+   cost" exceeds "one fixed-cost full clear" (~40,000-ish cycles).
+   Worth measuring directly with 2, 4, 8... objects rather than
+   guessing where that line is.
 3. Re-run `hires-bounce/tests/bench_scene.c`'s ship+3-asteroids scene
-   with all of the above, to get a real, un-silently-wrong answer to
-   the question that paused `hires-bounce/`: does this close enough of
-   the 65-75x-over-budget gap to make a CPU-drawn vector scene viable,
-   or does it still point to hardware sprites? Given (1), use trick #2
-   (indirect-Y) for this, not trick #2b, unless (1) resolves in #2b's
-   favor first.
-4. Push the rotating-square demo's per-step budget down toward 1-2
-   frames (from ~9.2 today): shorter edges (smaller radius) and/or
-   advancing more than 1 degree per redraw (fewer, bigger angular
-   steps -- cheaper per second of rotation even though each individual
-   redraw costs the same) are worth measuring regardless of how (1)
-   resolves.
+   with all of the above (trick #2 for drawing, whichever of trick
+   #3's erase or trick #4's clear wins at that object count from (2)),
+   to get a real, un-silently-wrong answer to the question that paused
+   `hires-bounce/`: does this close enough of the 65-75x-over-budget
+   gap to make a CPU-drawn vector scene viable, or does it still point
+   to hardware sprites?
+4. Push the rotating-square demo's per-step budget down further (6.85
+   PAL frame budgets with trick #4, down from 9.2 with trick #2/#3):
+   shorter edges (smaller radius) and/or advancing more than 1 degree
+   per redraw (fewer, bigger angular steps -- cheaper per second of
+   rotation even though each individual redraw costs the same) are
+   worth measuring.
 
 ## Build / run
 
@@ -390,14 +434,24 @@ make                        # build every .d64 (build/)
 make run-bench-pair-baseline
 make run-bench-pair-dirtylist
 make run-bench-pair-asm
+make run-bench-pair-smc
+make run-bench-angle-sweep
 make run-correctness-check
-make run-rotating-square        # the demo: watch it live in VICE
-make run-bench-rotating-square  # same demo, fixed frame count, reports cycles
+make run-correctness-check-clear
+make run-rotating-square             # trick #2/#3 demo: watch it live in VICE
+make run-bench-rotating-square       # same demo, fixed frame count, reports cycles
+make run-rotating-square-smc         # trick #2b variant
+make run-bench-rotating-square-smc
+make run-rotating-square-clear       # trick #4 variant (full clear instead of erase)
+make run-bench-rotating-square-clear
 tools/bench.sh build/bench-pair-asm.prg   # automated: prints avg cycles, no VICE-watching needed
 make clean
 ```
 
-`cfg/lowmem.cfg` is `hires-bounce/cfg/lowmem.cfg` plus one change: the
+`cfg/lowmem.cfg` is `hires-bounce/cfg/lowmem.cfg` plus two changes: the
 zero-page segment is grown from cc65's stock 26 bytes to 96
 (`$0002`-`$0061`), to fit `drawline_asm.s`'s hand-placed zero-page state
-alongside cc65's own runtime-reserved zp pointers.
+alongside cc65's own runtime-reserved zp pointers; and `__HIMEM__` is
+lowered to `$3F00` to reserve a linker-enforced `SCRATCH` region at
+`$3F00`-`$3FFF` for automated benchmark results (see "A second real
+bug" above).

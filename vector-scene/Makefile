@@ -15,7 +15,7 @@ CFG      := cfg/lowmem.cfg
 CFLAGS   := -Oirs -Isrc -Itests
 
 HDRS := src/hires.h src/dirtylist.h src/drawline_asm.h src/doublebuf.h \
-        src/circle_table.h tests/bench_report.h tests/cia_timer.h
+        src/circle_table.h src/clearbitmap_asm.h tests/bench_report.h tests/cia_timer.h
 
 .PHONY: all clean \
         bench-pair-baseline bench-pair-baseline-d64 run-bench-pair-baseline \
@@ -23,6 +23,9 @@ HDRS := src/hires.h src/dirtylist.h src/drawline_asm.h src/doublebuf.h \
         bench-pair-asm bench-pair-asm-d64 run-bench-pair-asm \
         bench-pair-smc bench-pair-smc-d64 run-bench-pair-smc \
         bench-angle-sweep bench-angle-sweep-d64 run-bench-angle-sweep \
+        correctness-check-clear correctness-check-clear-d64 run-correctness-check-clear \
+        rotating-square-clear rotating-square-clear-d64 run-rotating-square-clear \
+        bench-rotating-square-clear bench-rotating-square-clear-d64 run-bench-rotating-square-clear \
         correctness-check correctness-check-d64 run-correctness-check \
         rotating-square rotating-square-d64 run-rotating-square \
         bench-rotating-square bench-rotating-square-d64 run-bench-rotating-square \
@@ -32,7 +35,8 @@ HDRS := src/hires.h src/dirtylist.h src/drawline_asm.h src/doublebuf.h \
 all: bench-pair-baseline-d64 bench-pair-dirtylist-d64 bench-pair-asm-d64 \
      bench-pair-smc-d64 bench-angle-sweep-d64 correctness-check-d64 \
      rotating-square-d64 bench-rotating-square-d64 \
-     rotating-square-smc-d64 bench-rotating-square-smc-d64
+     rotating-square-smc-d64 bench-rotating-square-smc-d64 \
+     correctness-check-clear-d64 rotating-square-clear-d64 bench-rotating-square-clear-d64
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -136,6 +140,66 @@ $(ANGLE_D64): $(ANGLE_PRG)
 
 run-bench-angle-sweep: $(ANGLE_D64)
 	$(EMULATOR) -autostart $(ANGLE_D64)
+
+# --- trick #4: unrolled full-bitmap clear, correctness check ---
+
+CLRCORR_NAME := correctness-check-clear
+CLRCORR_SRCS := tests/correctness_check_clear.c src/hires.c src/doublebuf.c src/clearbitmap_asm.s
+CLRCORR_PRG  := $(BUILD)/$(CLRCORR_NAME).prg
+CLRCORR_D64  := $(BUILD)/$(CLRCORR_NAME).d64
+
+correctness-check-clear: $(CLRCORR_PRG)
+
+$(CLRCORR_PRG): $(CLRCORR_SRCS) $(HDRS) $(CFG) | $(BUILD)
+	$(CL65) -t $(TARGET) -C $(CFG) $(CFLAGS) -o $(CLRCORR_PRG) $(CLRCORR_SRCS)
+
+correctness-check-clear-d64: $(CLRCORR_D64)
+
+$(CLRCORR_D64): $(CLRCORR_PRG)
+	$(C1541) -format "$(CLRCORR_NAME),id" d64 $(CLRCORR_D64) -write $(CLRCORR_PRG) $(CLRCORR_NAME)
+
+run-correctness-check-clear: $(CLRCORR_D64)
+	$(EMULATOR) -autostart $(CLRCORR_D64)
+
+# --- trick #4: rotating square demo, full clear instead of erase ---
+
+DEMOCLR_NAME := rotating-square-clear
+DEMOCLR_SRCS := src/main_clear.c src/doublebuf.c src/circle_table.c src/drawline_asm.s src/clearbitmap_asm.s
+DEMOCLR_PRG  := $(BUILD)/$(DEMOCLR_NAME).prg
+DEMOCLR_D64  := $(BUILD)/$(DEMOCLR_NAME).d64
+
+rotating-square-clear: $(DEMOCLR_PRG)
+
+$(DEMOCLR_PRG): $(DEMOCLR_SRCS) $(HDRS) $(CFG) | $(BUILD)
+	$(CL65) -t $(TARGET) -C $(CFG) $(CFLAGS) -o $(DEMOCLR_PRG) $(DEMOCLR_SRCS)
+
+rotating-square-clear-d64: $(DEMOCLR_D64)
+
+$(DEMOCLR_D64): $(DEMOCLR_PRG)
+	$(C1541) -format "$(DEMOCLR_NAME),id" d64 $(DEMOCLR_D64) -write $(DEMOCLR_PRG) $(DEMOCLR_NAME)
+
+run-rotating-square-clear: $(DEMOCLR_D64)
+	$(EMULATOR) -autostart $(DEMOCLR_D64)
+
+# --- trick #4, measured ---
+
+RSBCLR_NAME := bench-rotating-square-clear
+RSBCLR_SRCS := tests/bench_rotating_square_clear.c src/doublebuf.c src/circle_table.c src/drawline_asm.s src/clearbitmap_asm.s
+RSBCLR_PRG  := $(BUILD)/$(RSBCLR_NAME).prg
+RSBCLR_D64  := $(BUILD)/$(RSBCLR_NAME).d64
+
+bench-rotating-square-clear: $(RSBCLR_PRG)
+
+$(RSBCLR_PRG): $(RSBCLR_SRCS) $(HDRS) $(CFG) | $(BUILD)
+	$(CL65) -t $(TARGET) -C $(CFG) $(CFLAGS) -o $(RSBCLR_PRG) $(RSBCLR_SRCS)
+
+bench-rotating-square-clear-d64: $(RSBCLR_D64)
+
+$(RSBCLR_D64): $(RSBCLR_PRG)
+	$(C1541) -format "$(RSBCLR_NAME),id" d64 $(RSBCLR_D64) -write $(RSBCLR_PRG) $(RSBCLR_NAME)
+
+run-bench-rotating-square-clear: $(RSBCLR_D64)
+	$(EMULATOR) -autostart $(RSBCLR_D64)
 
 # --- correctness regression test for drawline_asm.s and drawline_asm_smc.s ---
 
