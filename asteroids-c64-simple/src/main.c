@@ -52,6 +52,39 @@
 #define MAX_BULLETS 4
 #define BULLET_LIFETIME 45               /* frames, matches the prototype (~1.5s @ 30fps) */
 
+/* Asteroids: 4 fixed lumpy-rock outlines (no rotation yet -- unlike
+   the ship's per-heading SHIP_DX/DY, each shape covers its asteroid
+   at every moment), lifted from the "concave" point lists in the JS
+   prototype (github.com/michaelkemp/asteroids, gh-pages/index.html)
+   and rescaled from its [-1,1] normalized units so the farthest
+   vertex of any of the 4 lands at 14-15px from center -- ASTEROID_
+   MARGIN is a whole-pixel ceiling on that (checked against the
+   rounded tables below, not a guess), same instant-teleport
+   reasoning as SHIP_MARGIN. Each shape is its own array (they're
+   different lengths); AST_SHAPE_DX/DY/POINTS index them by shape id
+   0-3. MAX_ASTEROIDS is 4 so init_asteroids() can hand out one of
+   each shape. */
+#define MAX_ASTEROIDS 4
+#define ASTEROID_MARGIN 15
+
+static const signed char AST0_DX[11] = { 13, 9, 13, 6, 0, -6, -13, -13, -6, 3, 13 };
+static const signed char AST0_DY[11] = { 6, 0, -6, -13, -6, -13, -6, 6, 13, 13, 6 };
+
+static const signed char AST1_DX[13] = { 6, 13, 6, 0, -6, -13, -9, -13, -6, -3, 6, 13, 6 };
+static const signed char AST1_DY[13] = { -3, -6, -13, -9, -13, -6, 0, 6, 13, 9, 13, 3, -3 };
+
+static const signed char AST2_DX[13] = { 3, 13, 13, 3, -6, -3, -13, -13, -6, 3, 6, 13, 3 };
+static const signed char AST2_DY[13] = { 0, -3, -6, -13, -13, -6, -6, 3, 13, 9, 13, 6, 0 };
+
+static const signed char AST3_DX[12] = { 13, 6, -3, -13, -6, -13, -6, 0, 0, 6, 13, 13 };
+static const signed char AST3_DY[12] = { -3, -13, -13, -3, 0, 3, 13, 3, 13, 13, 3, -3 };
+
+static const signed char * const AST_SHAPE_DX[4] = { AST0_DX, AST1_DX, AST2_DX, AST3_DX };
+static const signed char * const AST_SHAPE_DY[4] = { AST0_DY, AST1_DY, AST2_DY, AST3_DY };
+static const unsigned char AST_SHAPE_POINTS[4] = { 11, 13, 13, 12 };
+
+#define MAX_POLY_POINTS 13   /* largest of SHIP_POINTS and AST_SHAPE_POINTS */
+
 /* real-time keyboard matrix scan (CIA1) -- NOT conio's kbhit()/cgetc(),
    which buffer discrete keypresses and can't report "is this key
    currently held down" the way a game needs. Matrix positions below
@@ -80,7 +113,7 @@ static void scan_keys(void)
     CLI();
 }
 
-static unsigned int shipAngle = 0;
+static unsigned char shipAngle = 0;   /* index into the 24 headings, not degrees */
 static int shipX = 160 << POS_SHIFT;
 static int shipY = 100 << POS_SHIFT;
 static int shipVX = 0;
@@ -92,6 +125,12 @@ static int bulletY[MAX_BULLETS];
 static int bulletVX[MAX_BULLETS];
 static int bulletVY[MAX_BULLETS];
 static unsigned char bulletLife[MAX_BULLETS];
+
+static int astX[MAX_ASTEROIDS];
+static int astY[MAX_ASTEROIDS];
+static int astVX[MAX_ASTEROIDS];
+static int astVY[MAX_ASTEROIDS];
+static unsigned char astShape[MAX_ASTEROIDS];
 
 static int wrap(int pos, int limit)
 {
@@ -123,16 +162,48 @@ static void apply_friction(int *v)
     }
 }
 
+/* Instant teleport, not smooth wraparound: wrap() (called on x/y
+   before this) keeps the position continuous (needed so velocity/
+   friction math has no seam), but if left at that, the center would
+   spend several frames drifting through [0,margin) /
+   (SCREEN_W-margin, SCREEN_W) -- exactly the band where the matching
+   draw_*()'s per-vertex check would keep rejecting it, i.e. visible
+   empty frames. So the instant the center enters that band, jump it
+   straight to the mirror position on the far side (offset by the
+   full safe span, SCREEN_W-2*margin, not by SCREEN_W -- a
+   whole-period shift is a no-op under wrap() and lands right back in
+   the same danger band). That keeps the center inside [margin,
+   SCREEN_W-margin) on every single frame its draw_*() ever sees it,
+   so that bounds check is a backstop that should never actually
+   fire, not the thing doing the work. margin must be a whole-pixel
+   ceiling on the shape's farthest vertex from its own center (see
+   SHIP_MARGIN/ASTEROID_MARGIN). */
+static void teleport_near_edge(int *x, int *y, int margin)
+{
+    int cx = *x >> POS_SHIFT;
+    int cy = *y >> POS_SHIFT;
+
+    if (cx < margin) {
+        *x += (SCREEN_W - 2 * margin) << POS_SHIFT;
+    } else if (cx >= SCREEN_W - margin) {
+        *x -= (SCREEN_W - 2 * margin) << POS_SHIFT;
+    }
+    if (cy < margin) {
+        *y += (SCREEN_H - 2 * margin) << POS_SHIFT;
+    } else if (cy >= SCREEN_H - margin) {
+        *y -= (SCREEN_H - 2 * margin) << POS_SHIFT;
+    }
+}
+
 static unsigned char keyKPrev;
 
 static void update_ship(void)
 {
     if (keyJ) {
-        shipAngle = (shipAngle < 3) ? shipAngle + 357 : shipAngle - 3;
+        shipAngle = (shipAngle == 0) ? SHIP_HEADINGS - 1 : shipAngle - 1;
     }
     if (keyL) {
-        shipAngle += 3;
-        if (shipAngle >= 360) shipAngle -= 360;
+        shipAngle = (shipAngle + 1 == SHIP_HEADINGS) ? 0 : shipAngle + 1;
     }
     if (keyI) {
         shipVX += THRUST_DX[shipAngle];
@@ -146,36 +217,7 @@ static void update_ship(void)
 
     shipX = wrap(shipX + shipVX, X_WRAP);
     shipY = wrap(shipY + shipVY, Y_WRAP);
-
-    /* Instant teleport, not smooth wraparound: wrap() above keeps the
-       position continuous (needed so velocity/friction math has no
-       seam), but if left at that, the center would spend several
-       frames drifting through [0,SHIP_MARGIN) / (SCREEN_W-SHIP_MARGIN,
-       SCREEN_W) -- exactly the band where draw_ship()'s per-vertex
-       check would keep rejecting it, i.e. visible empty frames. So the
-       instant the center enters that band, jump it straight to the
-       mirror position on the far side (offset by the full safe span,
-       SCREEN_W-2*SHIP_MARGIN, not by SCREEN_W -- a whole-period shift
-       is a no-op under wrap() and lands right back in the same danger
-       band). That keeps the center inside [SHIP_MARGIN,
-       SCREEN_W-SHIP_MARGIN) on every single frame draw_ship() ever
-       sees it, so its bounds check is a backstop that should never
-       actually fire, not the thing doing the work. */
-    {
-        int cx = shipX >> POS_SHIFT;
-        int cy = shipY >> POS_SHIFT;
-
-        if (cx < SHIP_MARGIN) {
-            shipX += (SCREEN_W - 2 * SHIP_MARGIN) << POS_SHIFT;
-        } else if (cx >= SCREEN_W - SHIP_MARGIN) {
-            shipX -= (SCREEN_W - 2 * SHIP_MARGIN) << POS_SHIFT;
-        }
-        if (cy < SHIP_MARGIN) {
-            shipY += (SCREEN_H - 2 * SHIP_MARGIN) << POS_SHIFT;
-        } else if (cy >= SCREEN_H - SHIP_MARGIN) {
-            shipY -= (SCREEN_H - 2 * SHIP_MARGIN) << POS_SHIFT;
-        }
-    }
+    teleport_near_edge(&shipX, &shipY, SHIP_MARGIN);
 
     /* Hyperspace (matches the prototype's down-arrow jump): triggers
        once per press, not every frame it's held. */
@@ -224,24 +266,61 @@ static void update_bullets(void)
     }
 }
 
-static void draw_ship(unsigned char *bitmap_base)
+/* -2, -1, 1 or 2 px/frame, never 0 -- so no asteroid ends up sitting
+   still. rand()%4-2 gives -2/-1/0/1; the 0 case gets remapped to 2. */
+static int random_ast_vel(void)
 {
-    int cx = shipX >> POS_SHIFT;
-    int cy = shipY >> POS_SHIFT;
-    int px[SHIP_POINTS], py[SHIP_POINTS];
+    int v = (rand() % 4) - 2;
+    if (v == 0) v = 2;
+    return v << POS_SHIFT;
+}
+
+static void init_asteroids(void)
+{
     unsigned char i;
 
-    /* Check every actual vertex, not a fixed worst-case radius around
-       the center: a fixed margin sized for the ship's farthest point
-       at ANY rotation would blank the ship out earlier than necessary
-       for most headings, since most of them don't reach that far in
-       the direction of the nearby edge. Computing the real 6 points
-       and checking each one directly still costs nothing but
-       comparisons -- no clipping math -- and only blanks the ship
-       when a point would truly land off-bitmap. */
-    for (i = 0; i < SHIP_POINTS; i++) {
-        px[i] = cx + SHIP_DX[shipAngle][i];
-        py[i] = cy + SHIP_DY[shipAngle][i];
+    for (i = 0; i < MAX_ASTEROIDS; i++) {
+        astX[i] = (int)(rand() % SCREEN_W) << POS_SHIFT;
+        astY[i] = (int)(rand() % SCREEN_H) << POS_SHIFT;
+        astVX[i] = random_ast_vel();
+        astVY[i] = random_ast_vel();
+        astShape[i] = i % 4;   /* one of each of the 4 shapes, for variety */
+    }
+}
+
+static void update_asteroids(void)
+{
+    unsigned char i;
+
+    for (i = 0; i < MAX_ASTEROIDS; i++) {
+        astX[i] = wrap(astX[i] + astVX[i], X_WRAP);
+        astY[i] = wrap(astY[i] + astVY[i], Y_WRAP);
+        teleport_near_edge(&astX[i], &astY[i], ASTEROID_MARGIN);
+    }
+}
+
+/* Shared by draw_ship() and draw_asteroids(): draws the closed
+   outline `dx`/`dy` (npoints signed offsets from center, first point
+   repeated as last) centered at (cx,cy).
+
+   Checks every actual vertex, not a fixed worst-case radius around
+   the center: a fixed margin sized for the shape's farthest point at
+   ANY heading would blank it out earlier than necessary for most
+   headings, since most of them don't reach that far in the direction
+   of the nearby edge. Computing the real points and checking each one
+   directly still costs nothing but comparisons -- no clipping math --
+   and only blanks the shape when a point would truly land
+   off-bitmap. */
+static void draw_polygon(unsigned char *bitmap_base, int cx, int cy,
+                          const signed char *dx, const signed char *dy,
+                          unsigned char npoints)
+{
+    int px[MAX_POLY_POINTS], py[MAX_POLY_POINTS];
+    unsigned char i;
+
+    for (i = 0; i < npoints; i++) {
+        px[i] = cx + dx[i];
+        py[i] = cy + dy[i];
         if (px[i] < 0 || px[i] >= SCREEN_W || py[i] < 0 || py[i] >= SCREEN_H) {
             return;
         }
@@ -249,7 +328,7 @@ static void draw_ship(unsigned char *bitmap_base)
 
     dla_bitmap_base = bitmap_base;
 
-    for (i = 0; i < SHIP_POINTS - 1; i++) {
+    for (i = 0; i < npoints - 1; i++) {
         dla_x0 = px[i];     dla_y0 = py[i];
         dla_x1 = px[i + 1]; dla_y1 = py[i + 1];
         if (dla_x0 > dla_x1) {
@@ -258,6 +337,23 @@ static void draw_ship(unsigned char *bitmap_base)
             t = dla_y0; dla_y0 = dla_y1; dla_y1 = t;
         }
         draw_line_asm();
+    }
+}
+
+static void draw_ship(unsigned char *bitmap_base)
+{
+    draw_polygon(bitmap_base, shipX >> POS_SHIFT, shipY >> POS_SHIFT,
+                 SHIP_DX[shipAngle], SHIP_DY[shipAngle], SHIP_POINTS);
+}
+
+static void draw_asteroids(unsigned char *bitmap_base)
+{
+    unsigned char i;
+
+    for (i = 0; i < MAX_ASTEROIDS; i++) {
+        unsigned char shape = astShape[i];
+        draw_polygon(bitmap_base, astX[i] >> POS_SHIFT, astY[i] >> POS_SHIFT,
+                     AST_SHAPE_DX[shape], AST_SHAPE_DY[shape], AST_SHAPE_POINTS[shape]);
     }
 }
 
@@ -290,12 +386,14 @@ int main(void)
 
     srand(VIC.rasterline); /* for hyperspace's random destination */
     doublebuf_init();
+    init_asteroids();
 
     for (;;) {
         scan_keys();
         update_ship();
         try_fire();
         update_bullets();
+        update_asteroids();
 
         if (back == 0) {
             clear_bitmap_buf0();
@@ -304,9 +402,17 @@ int main(void)
         }
         draw_ship(BUF_BITMAP[back]);
         draw_bullets(BUF_BITMAP[back]);
+        draw_asteroids(BUF_BITMAP[back]);
 
-        while (VIC.rasterline != 250) {
-        }
+        /* Swap the instant drawing finishes, no wait for a specific
+           raster line first -- when a frame's drawing runs long, that
+           wait's cost isn't "a little extra," it's up to a full extra
+           frame (waiting for line 250 to come back around). Measured
+           as not a significant speedup on its own, but costs visible
+           tearing when a swap lands mid-draw; kept anyway since
+           scan_keys() is back to being called once per loop iteration
+           (see its comment), where that wait's cost would otherwise
+           still tax input responsiveness too. */
         doublebuf_show(back);
 
         back = 1 - back;

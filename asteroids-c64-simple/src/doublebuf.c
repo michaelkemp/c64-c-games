@@ -30,6 +30,8 @@ void doublebuf_init(void)
     VIC.ctrl2 &= ~0x10; /* MCM=0: plain (non-multicolor) hi-res */
     VIC.ctrl1 |= 0x20;  /* BMM=1: bitmap mode on */
 
+    VIC.bordercolor = COLOR_BLACK;
+
     doublebuf_show(0);
 }
 
