@@ -58,3 +58,7 @@ dkms.conf
 build/
 *.prg
 *.d64
+
+# Python
+__pycache__/
+*.pyc
