@@ -20,6 +20,11 @@ is a flat per-voice sequence, easier to type by hand) -- converting
 between them is straightforward if it turns out to be worth doing, but
 hasn't been needed yet.
 
+A `play_song.py`-format song.json can already be heard on actual SID
+playback (not just this tool's preview audio): `../sid-tune-player-c64`
+compiles one into a binary the C64 loads and plays at runtime -- see
+that project's README.
+
 ## Hand-written songs (`play_song.py`)
 
 ```
@@ -144,7 +149,7 @@ interaction feels right):
   more spacing to comfortably read very high/low material like
   `we-three-kings-c64`'s
 
-## The JSON format
+## The GUI's JSON format (different from `play_song.py`'s, see above)
 
 ```json
 {
