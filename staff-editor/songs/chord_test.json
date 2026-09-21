@@ -3,9 +3,17 @@
   "tempo": 100,
   "time_signature": "4/4",
   "key_signature": "C",
+  "instruments": {
+    "1": {"name": "flute", "waveform": "triangle", "adsr": "49A5"},
+    "2": {"name": "clarinet", "waveform": "pulse", "adsr": "08B4", "pulse_width": 0.25},
+    "3": {"name": "electric piano", "waveform": "pulse", "adsr": "09B0", "pulse_width": 0.5,
+          "filter_cutoff": 1500, "filter_resonance": 0.15},
+    "4": {"name": "electric bass", "waveform": "saw", "adsr": "08C2",
+          "filter_cutoff": 500, "filter_resonance": 0.2}
+  },
   "voices": {
-    "soprano": ["G4-4", "D4-2", "D4-2", "C4-1", "C4-1", "C4-1", "C4-1", "G4-4"],
-    "alto":    ["E4-4", "B3-2", "B3-2", "A3-1", "A3-1", "A3-1", "A3-1", "E4-4"],
-    "bass":    ["C3-4", "G2-2", "G2-2", "F2-1", "F2-1", "F2-1", "F2-1", "C3-4"]
+    "soprano": ["I1", "G4-4", "D4-2", "D4-2", "I3", "C4-1", "C4-1", "C4-1", "C4-1", "I1", "G4-4"],
+    "alto":    ["I2", "E4-4", "B3-2", "B3-2", "A3-1", "A3-1", "A3-1", "A3-1", "E4-4"],
+    "bass":    ["I4", "C3-4", "G2-2", "G2-2", "F2-1", "F2-1", "F2-1", "F2-1", "C3-4"]
   }
 }
