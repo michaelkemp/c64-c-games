@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Generates src/pattern.c from reference/o-come-all-ye-faithful-keyboard.mid
+-- a real 4-part (SATB) keyboard MIDI realization of the hymn, in G
+major, at ticks_per_beat=256 (see the .mid's own metadata).
+
+Unlike sid-player-c64/src/pattern.c (hand-transcribed), this pattern
+is *derived* from the MIDI, the same way note_table.c is derived from
+a formula: the three voices this player uses (soprano, alto, and a
+"bass" line) are computed per-sixteenth-note-row as the highest,
+second-highest, and *lowest* currently-sounding pitch across all 4
+MIDI voices. That last part is deliberate, not a simplification: the
+MIDI's tenor and bass genuinely cross (the notated bass rests, or
+sits above the tenor) in a few spots, and "lowest sounding pitch"
+picks up the tenor there automatically, so the bass-register voice
+this player plays is never silent when a lower voice is available --
+exactly the "use tenor to fill in where bass has a rest" arrangement
+this project was asked for. Soprano/alto never need this fallback
+since they're always present in a 4-part texture.
+
+Only the first 320 rows (20 measures = one full pass of the tune) are
+emitted; the MIDI file repeats that pass a second time (for verses
+2-3's identical music), which would just make the SID pattern twice
+as long for no audible difference -- main.c already loops forever.
+
+Requires `mido` (pip install mido) -- a tool-time dependency, not a
+runtime one; nothing on the C64 side needs it.
+
+Usage: tools/gen_pattern.py > src/pattern.c
+"""
+import os
+import sys
+
+import mido
+
+MIDI_PATH = os.path.join(os.path.dirname(__file__), "..", "reference",
+                          "o-come-all-ye-faithful-keyboard.mid")
+ROWS_PER_VERSE = 320  # 20 measures * 16 sixteenth-notes/measure
+
+
+def load_notes(path):
+    mid = mido.MidiFile(path)
+    tpb = mid.ticks_per_beat
+    track = mid.tracks[1]  # track 0 is tempo/meta only, track 1 is the piano part
+    assert track.name == "Piano", track.name
+
+    notes = []
+    active = {}
+    abs_tick = 0
+    for msg in track:
+        abs_tick += msg.time
+        if msg.type == "note_on" and msg.velocity > 0:
+            active[(msg.channel, msg.note)] = abs_tick
+        elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+            key = (msg.channel, msg.note)
+            if key in active:
+                start = active.pop(key)
+                notes.append({"note": msg.note, "start": start, "end": abs_tick})
+    return notes, tpb
+
+
+def separate_voices(notes, row_ticks, total_rows):
+    """Returns three per-row lists (soprano, alto, bass), each entry
+    either None (silence) or the *id* (index into `notes`) of the
+    sounding MIDI note, so the caller can tell a same-pitch re-attack
+    (new id) apart from a genuinely held note (same id) -- see the
+    module docstring."""
+    for i, n in enumerate(notes):
+        n["id"] = i
+
+    boundaries = sorted(set(n["start"] for n in notes) | set(n["end"] for n in notes))
+    total_ticks = total_rows * row_ticks
+
+    soprano = [None] * total_rows
+    alto = [None] * total_rows
+    bass = [None] * total_rows
+
+    for b1, b2 in zip(boundaries, boundaries[1:]):
+        if b1 >= total_ticks:
+            break
+        active = sorted((n for n in notes if n["start"] <= b1 and n["end"] >= b2),
+                         key=lambda n: -n["note"])
+        if not active:
+            continue
+        r0, r1 = b1 // row_ticks, min(b2, total_ticks) // row_ticks
+        for r in range(r0, r1):
+            soprano[r] = active[0]
+            alto[r] = active[1] if len(active) > 1 else active[0]
+            bass[r] = active[-1]
+
+    return soprano, alto, bass
+
+
+NOTE_NAMES = ["C", "CS", "D", "DS", "E", "F", "FS", "G", "GS", "A", "AS", "B"]
+
+
+def midi_to_note_macro(midi_num):
+    name = NOTE_NAMES[midi_num % 12]
+    octave = midi_num // 12 - 1
+    return f"NOTE_{name}{octave}"
+
+
+def voice_to_cells(voice):
+    """None -> "NOTE_REST"; a new note id -> its NOTE_* macro; a
+    continuing id -> "HOLD"."""
+    cells = []
+    prev_id = None
+    for n in voice:
+        if n is None:
+            cells.append("NOTE_REST")
+            prev_id = None
+        elif n["id"] == prev_id:
+            cells.append("HOLD")
+            prev_id = n["id"]
+        else:
+            cells.append(midi_to_note_macro(n["note"]))
+            prev_id = n["id"]
+    return cells
+
+
+def main():
+    notes, tpb = load_notes(MIDI_PATH)
+    row_ticks = tpb // 4  # one row = one sixteenth note
+    assert all(n["start"] % row_ticks == 0 and n["end"] % row_ticks == 0 for n in notes), \
+        "MIDI has notes off the sixteenth-note grid; ROWS_PER_VERSE/row_ticks need rethinking"
+
+    soprano, alto, bass = separate_voices(notes, row_ticks, ROWS_PER_VERSE)
+    s_cells = voice_to_cells(soprano)
+    a_cells = voice_to_cells(alto)
+    b_cells = voice_to_cells(bass)
+
+    print('#include "pattern.h"')
+    print('#include "note_table.h"')
+    print()
+    print(f"/* Generated by tools/gen_pattern.py from")
+    print(f"   reference/o-come-all-ye-faithful-keyboard.mid -- do not hand-edit.")
+    print(f"   See that script's docstring for how the 4-part MIDI (soprano,")
+    print(f"   alto, tenor, bass) became the 3 voices below. One row = one")
+    print(f"   sixteenth note; {ROWS_PER_VERSE} rows = {ROWS_PER_VERSE // 16} measures = one full")
+    print(f"   pass of the tune (\"O Come, All Ye Faithful\", key of G). */")
+    print()
+    print("const pattern_row_t PATTERN[] = {")
+    for i in range(ROWS_PER_VERSE):
+        if i % 16 == 0:
+            print(f"    /* measure {i // 16 + 1} */")
+        s, a, b = s_cells[i], a_cells[i], b_cells[i]
+        print(f"    {{ {s + ',':11s}{a + ',':11s}{b:10s} }},")
+    print("};")
+    print()
+    print(f"const unsigned PATTERN_LENGTH = sizeof(PATTERN) / sizeof(PATTERN[0]);")
+
+
+if __name__ == "__main__":
+    main()
