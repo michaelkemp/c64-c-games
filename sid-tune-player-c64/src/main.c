@@ -26,19 +26,25 @@
 #define GATE_GAP_FRAMES 2
 #endif
 
-/* All rate 0 (fastest) -- see o-come-all-ye-faithful-c64/src/main.c's
-   long comment for why: the SID envelope generator's documented
-   "ADSR delay bug" stalls for ~34ms if a transition ever drops to a
-   *smaller* A/D/R rate than the one just active, which every
-   A->D->R->A cycle here avoids by never using anything but rate 0. */
-#define VOICE_AD 0x00
-#define VOICE_SR 0xC0
-#define BASS_AD  0x00
-#define BASS_SR  0xA0
-
 static unsigned char rows[MAX_ROWS * 3]; /* interleaved soprano,alto,bass per row */
 static unsigned row_count;
 static unsigned char row_frames;
+
+/* One instrument per voice (soprano, alto, bass), loaded from the
+   .tune file's header -- see tools/gen_tune.py's resolve_instrument().
+   Each voice's AD/SR is written once at startup and never rewritten
+   during playback (only GATE toggles per note), so the SID envelope
+   generator's documented "ADSR delay bug" -- a stall of up to ~34ms
+   if the A/D/R *rate* is rewritten while a smaller one is still
+   pending -- doesn't apply here the way it would if rates were being
+   swapped in and out per note or per row (as sid.c's comment notes
+   voice 3 used to do in an earlier version of this idea). If a
+   particular instrument's attack/decay/release ever sounds audibly
+   delayed on real hardware, that bug is the first thing to suspect. */
+static unsigned char voice_waveform[3];
+static unsigned voice_pw[3];
+static unsigned char voice_ad[3];
+static unsigned char voice_sr[3];
 
 /* Reads exactly `size` bytes or fails -- cbm_read() isn't guaranteed
    to fill the buffer in one call, unlike host-OS read(). Returns 0 on
@@ -93,7 +99,7 @@ static void load_tune(const char *name)
        by hand (a debug dump here once showed the file's bytes were
        exactly right and this comparison was the thing that was wrong).
        A raw byte value has no such ambiguity. */
-    if (header[0] != 0x54 || header[1] != 1) {
+    if (header[0] != 0x54 || header[1] != 2) {
         fail("bad magic/version");
     }
 
@@ -101,6 +107,21 @@ static void load_tune(const char *name)
     row_count = header[3] | (header[4] << 8);
     if (row_count > MAX_ROWS) {
         fail("too many rows for MAX_ROWS");
+    }
+
+    {
+        unsigned char instruments[15];
+        unsigned char i, off;
+        if (read_exact(TUNE_LFN, instruments, sizeof(instruments))) {
+            fail("truncated instrument block");
+        }
+        for (i = 0; i < 3; i++) {
+            off = i * 5;
+            voice_waveform[i] = instruments[off];
+            voice_pw[i] = instruments[off + 1] | ((unsigned)instruments[off + 2] << 8);
+            voice_ad[i] = instruments[off + 3];
+            voice_sr[i] = instruments[off + 4];
+        }
     }
 
     if (read_exact(TUNE_LFN, rows, (unsigned)row_count * 3)) {
@@ -140,9 +161,9 @@ static void play_row(unsigned i, unsigned next_i)
     const unsigned char *row = &rows[i * 3];
     const unsigned char *next = &rows[next_i * 3];
 
-    step_voice(&SID.v1, row[0], WAVE_TRIANGLE);
-    step_voice(&SID.v2, row[1], WAVE_TRIANGLE);
-    step_voice(&SID.v3, row[2], WAVE_SAWTOOTH);
+    step_voice(&SID.v1, row[0], voice_waveform[0]);
+    step_voice(&SID.v2, row[1], voice_waveform[1]);
+    step_voice(&SID.v3, row[2], voice_waveform[2]);
 
     wait_frames(row_frames - GATE_GAP_FRAMES);
 
@@ -166,9 +187,14 @@ int main(void)
     load_tune("TUNE");
 
     sid_init();
-    sid_set_envelope(&SID.v1, VOICE_AD, VOICE_SR);
-    sid_set_envelope(&SID.v2, VOICE_AD, VOICE_SR);
-    sid_set_envelope(&SID.v3, BASS_AD, BASS_SR);
+    sid_set_envelope(&SID.v1, voice_ad[0], voice_sr[0]);
+    sid_set_envelope(&SID.v2, voice_ad[1], voice_sr[1]);
+    sid_set_envelope(&SID.v3, voice_ad[2], voice_sr[2]);
+    /* Pulse width only matters for WAVE_PULSE voices, but it's harmless
+       to set on every voice -- the other waveforms ignore it. */
+    SID.v1.pw = voice_pw[0];
+    SID.v2.pw = voice_pw[1];
+    SID.v3.pw = voice_pw[2];
 
     while (1) {
         for (i = 0; i < row_count; i++) {
