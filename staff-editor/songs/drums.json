@@ -1,0 +1,29 @@
+{
+  "title": "drum test",
+  "tempo": 100,
+  "time_signature": "4/4",
+  "key_signature": "C",
+  "instruments": {
+    "kick":          {"name": "kick (bass drum)",              "waveform": "triangle", "adsr": "0602", "filter_cutoff": 250,  "filter_resonance": 0.13, "filter_mode": "lowpass"},
+    "kick_hard":     {"name": "kick (harder / electronic)",     "waveform": "noise",    "adsr": "0501", "filter_cutoff": 350,  "filter_resonance": 0.2,  "filter_mode": "lowpass"},
+    "tom_low":       {"name": "tom (low)",                      "waveform": "triangle", "adsr": "0703", "filter_cutoff": 500,  "filter_resonance": 0.2,  "filter_mode": "lowpass"},
+    "tom_high":      {"name": "tom (high)",                     "waveform": "triangle", "adsr": "0502", "filter_cutoff": 750,  "filter_resonance": 0.13, "filter_mode": "lowpass"},
+    "snare":         {"name": "snare",                          "waveform": "noise",    "adsr": "0824", "filter_cutoff": 1200, "filter_resonance": 0.33, "filter_mode": "bandpass"},
+    "snare_crunchy": {"name": "snare (crunchy, 80s electronic)","waveform": "noise",    "adsr": "0613", "filter_cutoff": 1400, "filter_resonance": 0.4,  "filter_mode": "highpass"},
+    "snare_tone":    {"name": "snare tonal layer (pulse crack)","waveform": "pulse",    "adsr": "0613", "pulse_width": 0.5},
+    "hihat_closed":  {"name": "hi-hat (closed)",                "waveform": "noise",    "adsr": "0201", "filter_cutoff": 2500, "filter_resonance": 0.2,  "filter_mode": "highpass"},
+    "hihat_open":    {"name": "hi-hat (open)",                  "waveform": "noise",    "adsr": "0504", "filter_cutoff": 2300, "filter_resonance": 0.27, "filter_mode": "highpass"},
+    "cymbal":        {"name": "cymbal",                         "waveform": "noise",    "adsr": "0A17", "filter_cutoff": 3000, "filter_resonance": 0.33, "filter_mode": "highpass"},
+    "crash":         {"name": "crash",                          "waveform": "noise",    "adsr": "0C29", "filter_cutoff": 2600, "filter_resonance": 0.4,  "filter_mode": "highpass"}
+  },
+  "voices": {
+    "soprano": ["Icrash", "C4-4", "R-4"],
+    "alto":    ["Ihihat_closed",
+                "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5",
+                "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5", "C4-0.5",
+                "Ihihat_open", "C4-0.5"],
+    "bass":    ["Ikick", "C2-1", "Isnare", "D2-1", "Ikick", "C2-1", "Isnare", "D2-1",
+                "Ikick", "C2-1", "Isnare", "D2-1", "Ikick", "C2-1",
+                "Itom_low", "D3-0.5", "Itom_high", "A3-0.5"]
+  }
+}

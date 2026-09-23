@@ -1,0 +1,48 @@
+{
+  "title": "drum test",
+  "tempo": 60,
+  "time_signature": "4/4",
+  "key_signature": "D",
+  "instruments": {
+    "1": {"name": "kick-bass",         "waveform": "triangle", "adsr": "0602", "filter_cutoff": 250,  "filter_resonance": 0.13, "filter_mode": "lowpass"},
+    "2": {"name": "kick-electronic",   "waveform": "noise",    "adsr": "0501", "filter_cutoff": 350,  "filter_resonance": 0.2,  "filter_mode": "lowpass"},
+    "3": {"name": "tom-low",           "waveform": "triangle", "adsr": "0703", "filter_cutoff": 500,  "filter_resonance": 0.2,  "filter_mode": "lowpass"},
+    "4": {"name": "tom-high",          "waveform": "triangle", "adsr": "0502", "filter_cutoff": 750,  "filter_resonance": 0.13, "filter_mode": "lowpass"},
+    "5": {"name": "snare",             "waveform": "noise",    "adsr": "0824", "filter_cutoff": 1200, "filter_resonance": 0.33, "filter_mode": "bandpass"},
+    "6": {"name": "snare-electronic",  "waveform": "noise",    "adsr": "0613", "filter_cutoff": 1400, "filter_resonance": 0.4,  "filter_mode": "highpass"},
+    "7": {"name": "snare-pulse-crack", "waveform": "pulse",    "adsr": "0613", "pulse_width": 0.5},
+    "8": {"name": "hi-hat-closed",     "waveform": "noise",    "adsr": "0201", "filter_cutoff": 2500, "filter_resonance": 0.2,  "filter_mode": "highpass"},
+    "9": {"name": "hi-hat-open",       "waveform": "noise",    "adsr": "0504", "filter_cutoff": 2300, "filter_resonance": 0.27, "filter_mode": "highpass"},
+    "10": {"name": "cymbal",           "waveform": "noise",    "adsr": "0A17", "filter_cutoff": 3000, "filter_resonance": 0.33, "filter_mode": "highpass"},
+    "11": {"name": "crash",            "waveform": "noise",    "adsr": "0C29", "filter_cutoff": 2600, "filter_resonance": 0.4,  "filter_mode": "highpass"},
+    "13":  {"name": "Orchestral Strings",    "waveform": "saw",      "adsr": "78A6", "filter_cutoff": 2000, "filter_resonance": 0.10}
+
+  },
+  "voices": {
+    "soprano": [
+
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125",
+      "I9","C3-0.25", "I8","C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125", "C3-0.125"
+      
+    ],
+    "alto":    ["I13",
+      "R-2",
+      "D2-1.5", "E2-0.5", "F2-1", "F2-0.5", "F2-0.5", "G2-0.25", "F2-0.25", "G2-0.5", "F2-2", "R-1"
+    ],
+    "bass":    []
+  }
+}
